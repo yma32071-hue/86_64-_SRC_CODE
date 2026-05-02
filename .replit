@@ -21,14 +21,19 @@ args = "Start application"
 name = "Start application"
 author = "agent"
 
+[workflows.workflow.metadata]
+outputType = "webview"
+
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build && ./build/x86emu"
-
-[workflows.workflow.metadata]
-outputType = "console"
+args = "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j4 && ./build/x86emu"
+waitForPort = 5000
 
 [deployment]
 deploymentTarget = "vm"
 run = ["./build/x86emu"]
-build = ["bash", "-c", "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build"]
+build = ["bash", "-c", "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j4"]
+
+[[ports]]
+localPort = 5000
+externalPort = 80

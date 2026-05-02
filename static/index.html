@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>x86 Emulator</title>
+<style>
+:root {
+  --bg:      #0d0d0d;
+  --panel:   #141414;
+  --border:  #2a2a2a;
+  --accent:  #00e5ff;
+  --accent2: #ff6b35;
+  --green:   #39ff14;
+  --text:    #d0d0d0;
+  --dim:     #606060;
+  --eip-bg:  #1a2a1a;
+  --eip-border:#39ff14;
+  --hlt:     #ff3333;
+  --run:     #00c853;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: 'Courier New', monospace; font-size: 12px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ---- Header ---- */
+header { background: #0a0a0a; border-bottom: 1px solid var(--border); padding: 6px 12px; display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
+header h1 { color: var(--accent); font-size: 14px; font-weight: bold; letter-spacing: 2px; white-space: nowrap; }
+header h1 span { color: var(--accent2); }
+
+.controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.btn { background: #1e1e1e; border: 1px solid var(--border); color: var(--text); padding: 4px 10px; cursor: pointer; border-radius: 3px; font-family: 'Courier New', monospace; font-size: 11px; transition: all 0.15s; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.run   { border-color: var(--run);    color: var(--run); }
+.btn.run:hover { background: #0a1e0a; }
+.btn.step  { border-color: var(--accent); color: var(--accent); }
+.btn.step:hover{ background: #0a1a1e; }
+.btn.reset { border-color: #ff4444; color: #ff4444; }
+.btn.reset:hover{ background: #1e0a0a; }
+.btn.pause { border-color: #ffcc00; color: #ffcc00; }
+.btn.pause:hover{ background: #1e1a00; }
+.btn.disabled { opacity: 0.4; cursor: not-allowed; }
+
+#status-badge { padding: 3px 10px; border-radius: 10px; font-size: 10px; font-weight: bold; letter-spacing: 1px; }
+.status-idle    { background: #1e1e1e; border: 1px solid var(--dim); color: var(--dim); }
+.status-running { background: #0a1e0a; border: 1px solid var(--run); color: var(--run); animation: pulse 1s infinite; }
+.status-halted  { background: #1e0a0a; border: 1px solid var(--hlt); color: var(--hlt); }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+
+.speed-wrap { display: flex; align-items: center; gap: 6px; margin-left: 6px; }
+.speed-wrap label { color: var(--dim); font-size: 10px; }
+#speed { width: 80px; accent-color: var(--accent); }
+#cycles-count { color: var(--dim); font-size: 10px; min-width: 100px; }
+
+.prog-select { background: #1e1e1e; border: 1px solid var(--border); color: var(--text); padding: 3px 6px; font-family: 'Courier New', monospace; font-size: 11px; border-radius: 3px; }
+
+/* ---- Main layout ---- */
+.workspace { display: flex; flex: 1; overflow: hidden; gap: 1px; background: var(--border); }
+
+/* ---- Left: Registers ---- */
+.panel-regs { width: 190px; flex-shrink: 0; background: var(--panel); display: flex; flex-direction: column; overflow: hidden; }
+.panel-title { background: #0f0f0f; border-bottom: 1px solid var(--border); padding: 4px 8px; color: var(--accent); font-size: 10px; letter-spacing: 2px; font-weight: bold; text-transform: uppercase; flex-shrink: 0; }
+.reg-table { padding: 6px; overflow-y: auto; flex: 1; }
+.reg-row { display: flex; justify-content: space-between; align-items: center; padding: 2px 4px; border-radius: 2px; transition: background 0.1s; }
+.reg-row:hover { background: #1e1e1e; }
+.reg-name { color: var(--accent2); font-size: 11px; min-width: 30px; }
+.reg-val  { color: #fff; font-size: 11px; font-family: 'Courier New', monospace; }
+.reg-val.changed { color: var(--green); animation: flash 0.4s; }
+@keyframes flash { 0%{background:#1a2a1a}100%{background:transparent} }
+.reg-sep  { border-top: 1px solid var(--border); margin: 4px 0; }
+
+.flags-section { border-top: 1px solid var(--border); padding: 6px; }
+.flags-title { color: var(--dim); font-size: 9px; letter-spacing: 2px; margin-bottom: 4px; }
+.flags-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+.flag-cell { background: #1a1a1a; border-radius: 2px; padding: 2px 4px; text-align: center; border: 1px solid var(--border); }
+.flag-name { color: var(--dim); font-size: 9px; }
+.flag-val  { font-size: 11px; font-weight: bold; }
+.flag-val.on  { color: var(--green); }
+.flag-val.off { color: #333; }
+
+/* ---- Center ---- */
+.panel-center { flex: 1; display: flex; flex-direction: column; background: var(--panel); overflow: hidden; min-width: 0; }
+
+.tabs { display: flex; background: #0f0f0f; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.tab { padding: 5px 14px; cursor: pointer; font-size: 10px; letter-spacing: 1px; color: var(--dim); border-bottom: 2px solid transparent; transition: all 0.15s; }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab:hover:not(.active) { color: var(--text); }
+
+.tab-content { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+.tab-content.active { display: flex; }
+
+/* Disassembly */
+#disasm-list { flex: 1; overflow-y: auto; font-size: 11px; }
+.disasm-row { display: flex; padding: 1px 8px; gap: 8px; cursor: pointer; transition: background 0.1s; }
+.disasm-row:hover { background: #1e1e1e; }
+.disasm-row.current { background: var(--eip-bg); border-left: 2px solid var(--eip-border); }
+.disasm-row.current .disasm-text { color: var(--green); font-weight: bold; }
+.disasm-addr { color: var(--dim); min-width: 72px; }
+.disasm-bytes{ color: #444; min-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.disasm-text { color: var(--text); flex: 1; }
+.disasm-row.breakpoint { border-left: 2px solid var(--accent2); }
+.disasm-row.breakpoint .disasm-addr { color: var(--accent2); }
+.disasm-toolbar { background: #0f0f0f; border-top: 1px solid var(--border); padding: 4px 8px; display: flex; gap: 8px; align-items: center; font-size: 10px; flex-shrink: 0; }
+.disasm-toolbar input { background: #1e1e1e; border: 1px solid var(--border); color: var(--text); padding: 2px 6px; font-family: 'Courier New', monospace; font-size: 10px; border-radius: 2px; width: 100px; }
+.disasm-toolbar label { color: var(--dim); }
+
+/* Memory hex view */
+#hex-container { flex: 1; overflow-y: auto; font-size: 10.5px; }
+.hex-row { display: flex; padding: 1px 8px; gap: 0; }
+.hex-row:hover { background: #1a1a1a; }
+.hex-addr2 { color: var(--accent); min-width: 80px; }
+.hex-bytes { display: flex; gap: 2px; min-width: 350px; }
+.hex-byte { min-width: 22px; text-align: center; color: var(--text); }
+.hex-byte.zero { color: #333; }
+.hex-byte.nonzero { color: #a0c4ff; }
+.hex-ascii { color: var(--dim); margin-left: 10px; letter-spacing: 1px; }
+.hex-toolbar { background: #0f0f0f; border-top: 1px solid var(--border); padding: 4px 8px; display: flex; gap: 8px; align-items: center; font-size: 10px; flex-shrink: 0; }
+.hex-toolbar input { background: #1e1e1e; border: 1px solid var(--border); color: var(--text); padding: 2px 6px; font-family: 'Courier New', monospace; font-size: 10px; border-radius: 2px; width: 100px; }
+.hex-toolbar label { color: var(--dim); }
+
+/* Custom binary loader */
+#load-tab-content { padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+#load-tab-content label { color: var(--dim); font-size: 10px; }
+#load-tab-content textarea { background: #1a1a1a; border: 1px solid var(--border); color: var(--text); font-family: 'Courier New', monospace; font-size: 11px; padding: 6px; border-radius: 3px; resize: vertical; min-height: 80px; width: 100%; }
+#load-tab-content input[type=text] { background: #1a1a1a; border: 1px solid var(--border); color: var(--text); font-family: 'Courier New', monospace; font-size: 11px; padding: 4px 6px; border-radius: 3px; width: 140px; }
+
+/* ---- Right: Screen + Log ---- */
+.panel-right { width: 520px; flex-shrink: 0; background: var(--panel); display: flex; flex-direction: column; overflow: hidden; }
+
+/* VGA Screen */
+#screen-wrap { border-bottom: 1px solid var(--border); background: #000; flex-shrink: 0; padding: 4px; }
+#vga-screen { display: inline-block; line-height: 1.15; font-family: 'Courier New', monospace; font-size: 11px; white-space: pre; }
+.vga-row { display: flex; }
+.vga-cell { display: inline-block; width: 7.5px; text-align: center; }
+
+/* Console / log */
+.panel-log { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.log-tabs { display: flex; background: #0f0f0f; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.log-tab { padding: 4px 12px; cursor: pointer; font-size: 10px; color: var(--dim); border-bottom: 2px solid transparent; }
+.log-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+#console-log, #io-log { flex: 1; overflow-y: auto; padding: 6px 8px; font-size: 10px; line-height: 1.5; }
+#console-log { color: #aaffaa; white-space: pre-wrap; word-break: break-all; }
+#io-log { color: #aaaaff; }
+.io-entry { color: #8888ff; }
+
+/* ---- Status bar ---- */
+footer { background: #080808; border-top: 1px solid var(--border); padding: 3px 12px; display: flex; gap: 20px; font-size: 10px; color: var(--dim); flex-shrink: 0; }
+footer span b { color: var(--text); }
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #0a0a0a; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #555; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <h1>x86<span>++</span> EMULATOR</h1>
+
+  <div class="controls">
+    <select class="prog-select" id="prog-select" title="Load a built-in demo">
+      <option value="">-- Load Demo --</option>
+      <option value="hello">Hello World</option>
+      <option value="fibonacci">Fibonacci Sequence</option>
+      <option value="counter">Counter (1M iterations)</option>
+      <option value="sieve">Sieve of Eratosthenes</option>
+      <option value="colors">Color Screen</option>
+    </select>
+    <button class="btn step"  id="btn-step"  onclick="doStep()">&#9654; STEP</button>
+    <button class="btn run"   id="btn-run"   onclick="doRun()">&#9654;&#9654; RUN</button>
+    <button class="btn pause" id="btn-pause" onclick="doPause()" style="display:none">&#9646;&#9646; PAUSE</button>
+    <button class="btn reset" onclick="doReset()">&#8635; RESET</button>
+    <div class="speed-wrap">
+      <label>SPEED</label>
+      <input type="range" id="speed" min="1" max="6" value="4" title="Execution speed">
+      <span id="speed-label" style="color:var(--dim);font-size:10px">FAST</span>
+    </div>
+  </div>
+
+  <span id="status-badge" class="status-idle">IDLE</span>
+  <span id="cycles-count">Cycles: 0</span>
+</header>
+
+<!-- MAIN WORKSPACE -->
+<div class="workspace">
+
+  <!-- LEFT: Registers -->
+  <div class="panel-regs">
+    <div class="panel-title">CPU REGISTERS</div>
+    <div class="reg-table" id="reg-table">
+      <div class="reg-row"><span class="reg-name">EAX</span><span class="reg-val" id="r-eax">0x00000000</span></div>
+      <div class="reg-row"><span class="reg-name">EBX</span><span class="reg-val" id="r-ebx">0x00000000</span></div>
+      <div class="reg-row"><span class="reg-name">ECX</span><span class="reg-val" id="r-ecx">0x00000000</span></div>
+      <div class="reg-row"><span class="reg-name">EDX</span><span class="reg-val" id="r-edx">0x00000000</span></div>
+      <div class="reg-sep"></div>
+      <div class="reg-row"><span class="reg-name">ESI</span><span class="reg-val" id="r-esi">0x00000000</span></div>
+      <div class="reg-row"><span class="reg-name">EDI</span><span class="reg-val" id="r-edi">0x00000000</span></div>
+      <div class="reg-row"><span class="reg-name">EBP</span><span class="reg-val" id="r-ebp">0x00000000</span></div>
+      <div class="reg-row"><span class="reg-name">ESP</span><span class="reg-val" id="r-esp">0x00000000</span></div>
+      <div class="reg-sep"></div>
+      <div class="reg-row"><span class="reg-name" style="color:var(--accent)">EIP</span><span class="reg-val" id="r-eip" style="color:var(--green)">0x00001000</span></div>
+      <div class="reg-row"><span class="reg-name">EFLAGS</span><span class="reg-val" id="r-eflags">0x00000002</span></div>
+    </div>
+    <div class="flags-section">
+      <div class="flags-title">FLAGS</div>
+      <div class="flags-grid">
+        <div class="flag-cell"><div class="flag-name">CF</div><div class="flag-val off" id="f-cf">0</div></div>
+        <div class="flag-cell"><div class="flag-name">PF</div><div class="flag-val off" id="f-pf">0</div></div>
+        <div class="flag-cell"><div class="flag-name">AF</div><div class="flag-val off" id="f-af">0</div></div>
+        <div class="flag-cell"><div class="flag-name">ZF</div><div class="flag-val off" id="f-zf">0</div></div>
+        <div class="flag-cell"><div class="flag-name">SF</div><div class="flag-val off" id="f-sf">0</div></div>
+        <div class="flag-cell"><div class="flag-name">OF</div><div class="flag-val off" id="f-of">0</div></div>
+        <div class="flag-cell"><div class="flag-name">DF</div><div class="flag-val off" id="f-df">0</div></div>
+        <div class="flag-cell"><div class="flag-name">IF</div><div class="flag-val on"  id="f-if">1</div></div>
+        <div class="flag-cell"><div class="flag-name">TF</div><div class="flag-val off" id="f-tf">0</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CENTER: Disasm / Memory / Loader -->
+  <div class="panel-center">
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('disasm')">DISASSEMBLY</div>
+      <div class="tab"       onclick="switchTab('memory')">MEMORY</div>
+      <div class="tab"       onclick="switchTab('load')">LOAD PROGRAM</div>
+    </div>
+
+    <!-- Disassembly tab -->
+    <div id="tab-disasm" class="tab-content active">
+      <div id="disasm-list"></div>
+      <div class="disasm-toolbar">
+        <label>ADDR</label>
+        <input type="text" id="disasm-addr" value="0x1000" placeholder="0x1000">
+        <button class="btn" onclick="refreshDisasm()">GO</button>
+        <button class="btn" onclick="followEIP()">FOLLOW EIP</button>
+        <span style="color:var(--dim);margin-left:8px">Click addr to toggle breakpoint</span>
+      </div>
+    </div>
+
+    <!-- Memory tab -->
+    <div id="tab-memory" class="tab-content">
+      <div id="hex-container"></div>
+      <div class="hex-toolbar">
+        <label>ADDR</label>
+        <input type="text" id="mem-addr" value="0x1000" placeholder="0x1000">
+        <label>LEN</label>
+        <input type="text" id="mem-len" value="256" placeholder="256">
+        <button class="btn" onclick="refreshHex()">VIEW</button>
+        <button class="btn" onclick="document.getElementById('mem-addr').value='0xB8000'; refreshHex()">VGA BUF</button>
+        <button class="btn" onclick="document.getElementById('mem-addr').value='0x2000'; refreshHex()">0x2000</button>
+      </div>
+    </div>
+
+    <!-- Load program tab -->
+    <div id="tab-load" class="tab-content">
+      <div id="load-tab-content">
+        <div style="color:var(--accent);font-size:11px;margin-bottom:4px">&#9658; Load Custom Binary</div>
+        <label>Load Address (hex)</label>
+        <input type="text" id="load-addr" value="0x1000">
+        <label>Hex bytes (space-separated or continuous)</label>
+        <textarea id="load-hex" rows="5" placeholder="B8 01 00 00 00 40 EB FD F4&#10;...or&#10;B80100000040EBFDF4"></textarea>
+        <button class="btn step" onclick="loadCustom()" style="width:120px">LOAD &amp; RESET</button>
+
+        <div style="color:var(--dim);font-size:10px;margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+          <div style="color:var(--accent);margin-bottom:4px">&#9658; Quick Reference — Common x86 opcodes</div>
+          <table style="border-collapse:collapse;width:100%;font-size:10px">
+            <tr><td style="color:var(--accent2);padding:1px 8px 1px 0">B8 xx xx xx xx</td><td>MOV EAX, imm32</td></tr>
+            <tr><td style="color:var(--accent2);padding:1px 8px 1px 0">31 C0</td><td>XOR EAX, EAX</td></tr>
+            <tr><td style="color:var(--accent2);padding:1px 8px 1px 0">40</td><td>INC EAX</td></tr>
+            <tr><td style="color:var(--accent2);padding:1px 8px 1px 0">EB FE</td><td>JMP $ (infinite loop)</td></tr>
+            <tr><td style="color:var(--accent2);padding:1px 8px 1px 0">CD 10</td><td>INT 10h (BIOS video)</td></tr>
+            <tr><td style="color:var(--accent2);padding:1px 8px 1px 0">CD 21</td><td>INT 21h (DOS-like)</td></tr>
+            <tr><td style="color:var(--accent2);padding:1px 8px 1px 0">E8 xx xx xx xx</td><td>CALL rel32</td></tr>
+            <tr><td style="color:var(--accent2);padding:1px 8px 1px 0">C3</td><td>RET</td></tr>
+            <tr><td style="color:var(--accent2);padding:1px 8px 1px 0">50 / 58</td><td>PUSH EAX / POP EAX</td></tr>
+            <tr><td style="color:var(--accent2);padding:1px 8px 1px 0">F4</td><td>HLT (halt)</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Screen + Log -->
+  <div class="panel-right">
+    <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
+      <span>VGA DISPLAY (80×25)</span>
+      <span id="cursor-pos" style="color:var(--dim);font-size:9px">Cursor: 0,0</span>
+    </div>
+    <div id="screen-wrap">
+      <div id="vga-screen"></div>
+    </div>
+    <div class="panel-log">
+      <div class="log-tabs">
+        <div class="log-tab active" onclick="switchLogTab('console')">CONSOLE OUTPUT</div>
+        <div class="log-tab"       onclick="switchLogTab('io')">I/O LOG</div>
+      </div>
+      <div id="console-log"></div>
+      <div id="io-log" style="display:none"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- FOOTER STATUS BAR -->
+<footer>
+  <span>EIP: <b id="sb-eip">0x00001000</b></span>
+  <span>ESP: <b id="sb-esp">0x00000000</b></span>
+  <span>Cycles: <b id="sb-cycles">0</b></span>
+  <span>State: <b id="sb-state">IDLE</b></span>
+  <span>Memory: <b>8 MB</b></span>
+  <span>Mode: <b>32-bit Protected</b></span>
+  <span id="sb-info" style="margin-left:auto;color:var(--accent)"></span>
+</footer>
+
+<script>
+// ============================================================
+//  State
+// ============================================================
+const CGA = [
+  '#000000','#0000AA','#00AA00','#00AAAA','#AA0000','#AA00AA','#AA5500','#AAAAAA',
+  '#555555','#5555FF','#55FF55','#55FFFF','#FF5555','#FF55FF','#FFFF55','#FFFFFF'
+];
+
+let isRunning  = false;
+let runTimer   = null;
+let prevRegs   = {};
+let breakpoints= new Set();
+let consoleAll = '';
+let activeTab  = 'disasm';
+let activeLog  = 'console';
+
+// ============================================================
+//  Tab switching
+// ============================================================
+function switchTab(name) {
+  document.querySelectorAll('.tab-content').forEach(e => { e.classList.remove('active'); e.style.display='none'; });
+  document.querySelectorAll('.tab').forEach((e,i) => {
+    const names=['disasm','memory','load'];
+    e.classList.toggle('active', names[i]===name);
+  });
+  const el = document.getElementById('tab-'+name);
+  if (el) { el.classList.add('active'); el.style.display='flex'; }
+  activeTab = name;
+  if (name==='memory') refreshHex();
+  if (name==='disasm') refreshDisasm();
+}
+
+function switchLogTab(name) {
+  document.querySelectorAll('.log-tab').forEach((e,i) => {
+    e.classList.toggle('active', ['console','io'][i]===name);
+  });
+  document.getElementById('console-log').style.display = name==='console'?'block':'none';
+  document.getElementById('io-log').style.display      = name==='io'    ?'block':'none';
+  activeLog = name;
+}
+
+// ============================================================
+//  API helpers
+// ============================================================
+async function api(method, path, body) {
+  const opts = { method };
+  if (body) { opts.headers={'Content-Type':'application/json'}; opts.body=JSON.stringify(body); }
+  const r = await fetch(path, opts);
+  return r.json();
+}
+
+// ============================================================
+//  Update UI from state JSON
+// ============================================================
+function hex8(v)  { return '0x'+((v>>>0).toString(16).toUpperCase().padStart(8,'0')); }
+function hex2(v)  { return ((v&0xFF).toString(16).toUpperCase().padStart(2,'0')); }
+
+function updateRegs(s) {
+  const map = {
+    'r-eax': s.eax, 'r-ecx': s.ecx, 'r-edx': s.edx, 'r-ebx': s.ebx,
+    'r-esp': s.esp, 'r-ebp': s.ebp, 'r-esi': s.esi, 'r-edi': s.edi,
+    'r-eip': s.eip, 'r-eflags': s.eflags
+  };
+  for (const [id, val] of Object.entries(map)) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const newVal = hex8(val);
+    if (el.textContent !== newVal) {
+      el.textContent = newVal;
+      el.classList.remove('changed');
+      void el.offsetWidth;
+      el.classList.add('changed');
+    }
+  }
+  // Flags
+  const flags = ['cf','pf','af','zf','sf','of','df','if_','tf'];
+  const fkeys = ['cf','pf','af','zf','sf','of','df','if_','tf'];
+  const fids  = ['f-cf','f-pf','f-af','f-zf','f-sf','f-of','f-df','f-if','f-tf'];
+  for (let i=0; i<flags.length; i++) {
+    const el = document.getElementById(fids[i]);
+    if (!el) continue;
+    const on = !!s[fkeys[i]];
+    el.textContent = on ? '1' : '0';
+    el.className = 'flag-val ' + (on ? 'on' : 'off');
+  }
+
+  // Status badge
+  const badge = document.getElementById('status-badge');
+  const sb    = document.getElementById('sb-state');
+  if (s.halted) {
+    badge.textContent = 'HALTED'; badge.className = 'status-halted';
+    sb.textContent = 'HALTED'; sb.style.color = 'var(--hlt)';
+  } else if (isRunning) {
+    badge.textContent = 'RUNNING'; badge.className = 'status-running';
+    sb.textContent = 'RUNNING'; sb.style.color = 'var(--run)';
+  } else {
+    badge.textContent = 'IDLE'; badge.className = 'status-idle';
+    sb.textContent = 'IDLE'; sb.style.color = '';
+  }
+
+  // Footer
+  document.getElementById('sb-eip').textContent    = hex8(s.eip);
+  document.getElementById('sb-esp').textContent    = hex8(s.esp);
+  document.getElementById('sb-cycles').textContent = s.cycles;
+  document.getElementById('cycles-count').textContent = 'Cycles: '+s.cycles.toLocaleString();
+  document.getElementById('cursor-pos').textContent = `Cursor: ${s.cursorRow},${s.cursorCol}`;
+}
+
+// ============================================================
+//  VGA Screen renderer
+// ============================================================
+async function refreshScreen() {
+  const data = await api('GET','/api/screen');
+  const screen = document.getElementById('vga-screen');
+  let html = '';
+  for (let row=0; row<25; row++) {
+    html += '<div class="vga-row">';
+    for (let col=0; col<80; col++) {
+      const cell = data[row][col];
+      const ch   = cell.ch;
+      const attr = cell.attr;
+      const fg   = CGA[attr & 0x0F];
+      const bg   = CGA[(attr >> 4) & 0x07];
+      const blink= (attr>>7)&1;
+      let   c    = (ch >= 32 && ch < 127) ? String.fromCharCode(ch) : (ch===0?'\u00a0':'.');
+      if (c === ' ') c = '\u00a0';
+      const extra = blink ? 'animation:pulse 1s infinite;' : '';
+      html += `<span class="vga-cell" style="color:${fg};background:${bg};${extra}">${escHtml(c)}</span>`;
+    }
+    html += '</div>';
+  }
+  screen.innerHTML = html;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ============================================================
+//  Disassembly
+// ============================================================
+async function refreshDisasm(forceAddr) {
+  let addr = forceAddr;
+  if (addr === undefined) {
+    const raw = document.getElementById('disasm-addr').value.trim();
+    addr = parseInt(raw, raw.startsWith('0x')||raw.startsWith('0X') ? 16 : 10);
+    if (isNaN(addr)) addr = 0x1000;
+  }
+  const state = await api('GET', '/api/state');
+  const eip   = state.eip >>> 0;
+  const lines  = await api('GET', `/api/disasm?addr=${addr}&count=40`);
+  const list   = document.getElementById('disasm-list');
+  let html = '';
+  for (const l of lines) {
+    const isCurrent = (l.addr >>> 0) === eip;
+    const isBP      = breakpoints.has(l.addr >>> 0);
+    let cls = 'disasm-row';
+    if (isCurrent) cls += ' current';
+    if (isBP)      cls += ' breakpoint';
+    html += `<div class="${cls}" onclick="toggleBP(${l.addr})">
+      <span class="disasm-addr">${hex8(l.addr)}</span>
+      <span class="disasm-bytes">${escHtml(l.bytes)}</span>
+      <span class="disasm-text">${escHtml(l.text)}</span>
+    </div>`;
+  }
+  list.innerHTML = html || '<div style="padding:8px;color:var(--dim)">No instructions</div>';
+  // scroll current into view
+  const cur = list.querySelector('.current');
+  if (cur) cur.scrollIntoView({ block: 'center' });
+}
+
+function toggleBP(addr) {
+  if (breakpoints.has(addr)) breakpoints.delete(addr);
+  else breakpoints.add(addr);
+  if (activeTab === 'disasm') refreshDisasm();
+}
+
+function followEIP() {
+  api('GET','/api/state').then(s => {
+    const eip = s.eip >>> 0;
+    document.getElementById('disasm-addr').value = hex8(eip);
+    refreshDisasm(eip);
+  });
+}
+
+// ============================================================
+//  Memory hex view
+// ============================================================
+async function refreshHex() {
+  const rawAddr = document.getElementById('mem-addr').value.trim();
+  const rawLen  = document.getElementById('mem-len').value.trim();
+  const addr = parseInt(rawAddr, rawAddr.startsWith('0x')||rawAddr.startsWith('0X')?16:10) || 0;
+  const len  = parseInt(rawLen, 10) || 256;
+
+  const data = await api('GET', `/api/memory?addr=${addr}&len=${len}`);
+  const bytes = data.data;
+  const container = document.getElementById('hex-container');
+  let html = '';
+  for (let i=0; i<bytes.length; i+=16) {
+    const rowAddr = addr + i;
+    html += `<div class="hex-row"><span class="hex-addr2">${hex8(rowAddr)}</span><span class="hex-bytes">`;
+    let ascii = '';
+    for (let j=0; j<16; j++) {
+      if (i+j < bytes.length) {
+        const b = bytes[i+j];
+        const cls = b===0 ? 'hex-byte zero' : 'hex-byte nonzero';
+        html += `<span class="${cls}">${hex2(b)}</span>`;
+        ascii += (b>=32&&b<127) ? String.fromCharCode(b) : '.';
+      } else {
+        html += `<span class="hex-byte">  </span>`;
+        ascii += ' ';
+      }
+    }
+    html += `</span><span class="hex-ascii">${escHtml(ascii)}</span></div>`;
+  }
+  container.innerHTML = html || '<div style="padding:8px;color:var(--dim)">Empty</div>';
+}
+
+// ============================================================
+//  Controls
+// ============================================================
+async function doStep() {
+  if (isRunning) return;
+  const s = await api('POST','/api/step');
+  updateRegs(s);
+  await refreshScreen();
+  if (activeTab==='disasm') followEIP();
+  if (activeTab==='memory') refreshHex();
+  if (s.halted) {
+    setInfo('Program halted (HLT executed)');
+    await refreshLog();
+  }
+}
+
+const SPEED_STEPS = [200, 1000, 5000, 20000, 100000, 500000];
+const SPEED_NAMES = ['SLOW','MEDIUM','FAST','FASTER','MAX','WARP'];
+
+document.getElementById('speed').addEventListener('input', function() {
+  document.getElementById('speed-label').textContent = SPEED_NAMES[this.value-1];
+});
+
+function doRun() {
+  if (isRunning) return;
+  isRunning = true;
+  document.getElementById('btn-run').style.display   = 'none';
+  document.getElementById('btn-pause').style.display = '';
+  document.getElementById('btn-step').classList.add('disabled');
+  runLoop();
+}
+
+async function runLoop() {
+  if (!isRunning) return;
+  const speedIdx = parseInt(document.getElementById('speed').value) - 1;
+  const steps    = SPEED_STEPS[speedIdx];
+  const s        = await api('POST', `/api/run?steps=${steps}`);
+  updateRegs(s);
+  await refreshScreen();
+  if (activeTab==='disasm') followEIP();
+
+  // check breakpoints
+  let hitBP = breakpoints.has(s.eip>>>0);
+
+  if (s.halted || hitBP) {
+    isRunning = false;
+    document.getElementById('btn-run').style.display   = '';
+    document.getElementById('btn-pause').style.display = 'none';
+    document.getElementById('btn-step').classList.remove('disabled');
+    if (s.halted) setInfo('Program halted');
+    else setInfo(`Breakpoint hit at ${hex8(s.eip)}`);
+    await refreshLog();
+    updateRegs(s);
+    return;
+  }
+  // schedule next batch
+  const delay = speedIdx >= 4 ? 0 : 50;
+  runTimer = setTimeout(runLoop, delay);
+}
+
+function doPause() {
+  isRunning = false;
+  clearTimeout(runTimer);
+  document.getElementById('btn-run').style.display   = '';
+  document.getElementById('btn-pause').style.display = 'none';
+  document.getElementById('btn-step').classList.remove('disabled');
+  api('GET','/api/state').then(s => {
+    updateRegs(s);
+    if (activeTab==='disasm') followEIP();
+  });
+  setInfo('Paused');
+}
+
+async function doReset() {
+  isRunning = false;
+  clearTimeout(runTimer);
+  document.getElementById('btn-run').style.display   = '';
+  document.getElementById('btn-pause').style.display = 'none';
+  document.getElementById('btn-step').classList.remove('disabled');
+  const s = await api('POST','/api/reset');
+  updateRegs(s);
+  await refreshScreen();
+  consoleAll = '';
+  document.getElementById('console-log').textContent = '';
+  document.getElementById('io-log').innerHTML = '';
+  if (activeTab==='disasm') refreshDisasm(0x1000);
+  setInfo('Emulator reset');
+}
+
+// ============================================================
+//  Program loader
+// ============================================================
+document.getElementById('prog-select').addEventListener('change', async function() {
+  const prog = this.value;
+  if (!prog) return;
+  isRunning = false;
+  clearTimeout(runTimer);
+  document.getElementById('btn-run').style.display='';
+  document.getElementById('btn-pause').style.display='none';
+  document.getElementById('btn-step').classList.remove('disabled');
+  const s = await api('POST','/api/load', { program: prog });
+  updateRegs(s);
+  await refreshScreen();
+  consoleAll = '';
+  document.getElementById('console-log').textContent='';
+  document.getElementById('io-log').innerHTML='';
+  document.getElementById('disasm-addr').value='0x1000';
+  refreshDisasm(0x1000);
+  setInfo(`Loaded: ${prog}`);
+  this.value = '';
+});
+
+async function loadCustom() {
+  const rawAddr = document.getElementById('load-addr').value.trim();
+  const hexStr  = document.getElementById('load-hex').value.trim();
+  const addr    = parseInt(rawAddr, rawAddr.startsWith('0x')||rawAddr.startsWith('0X')?16:10) || 0x1000;
+
+  // Parse hex string
+  const cleaned = hexStr.replace(/\s+/g,'');
+  const data = [];
+  for (let i=0; i<cleaned.length-1; i+=2) {
+    data.push(parseInt(cleaned.substr(i,2),16));
+  }
+  if (!data.length) { setInfo('No valid hex data'); return; }
+
+  isRunning = false;
+  clearTimeout(runTimer);
+  const s = await api('POST','/api/load', { addr, hex: cleaned });
+  updateRegs(s);
+  await refreshScreen();
+  consoleAll = '';
+  document.getElementById('console-log').textContent='';
+  document.getElementById('disasm-addr').value = hex8(addr);
+  refreshDisasm(addr);
+  setInfo(`Loaded ${data.length} bytes at ${hex8(addr)}`);
+  switchTab('disasm');
+}
+
+// ============================================================
+//  Log
+// ============================================================
+async function refreshLog() {
+  const log = await api('GET','/api/log');
+  // IO log
+  let ioHtml='';
+  for (const e of (log.io||[])) ioHtml += `<div class="io-entry">${escHtml(e)}</div>`;
+  for (const e of (log.bios||[])) ioHtml += `<div style="color:#88ffaa">${escHtml(e)}</div>`;
+  document.getElementById('io-log').innerHTML = ioHtml;
+}
+
+// ============================================================
+//  Periodic polling when running
+// ============================================================
+let screenPollTimer = null;
+function startScreenPoll() {
+  screenPollTimer = setInterval(async () => {
+    if (isRunning) {
+      await refreshScreen();
+    }
+  }, 200);
+}
+startScreenPoll();
+
+// ============================================================
+//  Utility
+// ============================================================
+function setInfo(msg) {
+  document.getElementById('sb-info').textContent = msg;
+  setTimeout(()=>document.getElementById('sb-info').textContent='', 4000);
+}
+
+// ============================================================
+//  Keyboard shortcuts
+// ============================================================
+document.addEventListener('keydown', e => {
+  if (e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA') return;
+  if (e.key==='F8')  { e.preventDefault(); doStep(); }
+  if (e.key==='F5')  { e.preventDefault(); isRunning ? doPause() : doRun(); }
+  if (e.key==='F2')  { e.preventDefault(); doReset(); }
+});
+
+// ============================================================
+//  Initial load
+// ============================================================
+(async () => {
+  const s = await api('GET','/api/state');
+  updateRegs(s);
+  await refreshScreen();
+  refreshDisasm(0x1000);
+  document.getElementById('speed-label').textContent = SPEED_NAMES[parseInt(document.getElementById('speed').value)-1];
+  setInfo('x86 Emulator ready — F5=Run, F8=Step, F2=Reset');
+})();
+</script>
+</body>
+</html>
